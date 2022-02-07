@@ -1,11 +1,13 @@
-import functools
+import math
 
 import torch
 import torch.nn as nn
-import torch.utils as utils
+import torch.utils.checkpoint as checkpoint
+
+from ..native import jax
 
 
-class Attention(nn.Module):
+class FasterMultiHeadAttention(nn.Module):
     """Memory-efficient multi-head dot product attention.
 
     Attributes
@@ -27,16 +29,20 @@ class Attention(nn.Module):
         query_chunk_size : int, default=1024
         key_chunk_size : int, default=4096
         """
-        super(Attention, self).__init__()
+        super(FasterMultiHeadAttention, self).__init__()
         self.query_chunk_size = query_chunk_size
         self.key_chunk_size = key_chunk_size
 
     def forward(
         self,
         query: torch.Tensor,
-        key: torch.TensorType,
-        value: torch.TensorType,
+        key: torch.Tensor,
+        value: torch.Tensor,
     ):
+        print("1 >>>")
+        print(query.size())
+        print(key.size())
+        print(value.size())
         num_q, num_heads, q_features = query.size()
 
         def _chunk_scanner(chunk_idx, _):
@@ -50,22 +56,35 @@ class Attention(nn.Module):
                 query_chunk, key, value
             )
 
+        _, res = jax.lax.scan(
+            _chunk_scanner,
+            init=0,
+            xs=None,
+            length=math.ceil(num_q / self.query_chunk_size),
+        )
+        print("output >>>")
+        print(res.size(), f"but expected ({num_q}, {num_heads}, {value.shape[-1]})")
+        return res.reshape(num_q, num_heads, value.shape[-1])
+
     def _query_chunk_attention(
         self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor
     ):
         """Multi-head dot product attention with a limited number of queries."""
+        print("2 >>>")
+        print(query.size())
+        print(key.size())
+        print(value.size())
         num_kv, num_heads, k_features = key.shape
         v_features = value.shape[-1]
         key_chunk_size = min(self.key_chunk_size, num_kv)
         query = query / torch.sqrt(torch.tensor(k_features))
 
-        @functools.partial(utils.checkpoint, prevent_cse=False)
+        # @functools.partial(checkpoint.checkpoint, preserve_rng_state=True)
         def summarize_chunk(
             query: torch.Tensor, key: torch.Tensor, value: torch.Tensor
         ):
             attn_weights: torch.Tensor = torch.einsum("qhd,khd->qhk", query, key)
-            max_score = torch.max(attn_weights, dim=-1, keepdim=True)
-            print(max_score)
+            max_score, _ = torch.max(attn_weights, dim=-1, keepdim=True)
             max_score = max_score.detach()
             exp_weights = torch.exp(attn_weights - max_score)
             exp_values = torch.einsum("vhf,qhv->qhf", value, exp_weights)
@@ -75,28 +94,26 @@ class Attention(nn.Module):
                 max_score.reshape((query.size(0), num_heads)),
             )
 
-        def chunk_scanner(chunk_idx, key_chunk_size: int):
-            key_chunk_size = chunk_idx + key_chunk_size
+        def chunk_scanner(chunk_idx):
+            key_chunk_size_ = chunk_idx + key_chunk_size
             key_chunk = key[
-                chunk_idx:key_chunk_size,
+                chunk_idx:key_chunk_size_,
                 :num_heads,
                 :k_features,
             ]
             value_chunk = value[
-                chunk_idx:key_chunk_size,
+                chunk_idx:key_chunk_size_,
                 :num_heads,
                 :v_features,
             ]
-            return summarize_chunk(query, key_chunk, value_chunk)
+            return checkpoint.checkpoint(summarize_chunk, query, key_chunk, value_chunk)
 
-        chunk_values, chunk_weights, chunk_max = map(
-            lambda chunk_idx: chunk_scanner(
-                chunk_idx=chunk_idx, key_chunk_size=key_chunk_size
-            ),
+        chunk_values, chunk_weights, chunk_max = jax.lax.map_(
+            chunk_scanner,
             torch.arange(0, num_kv, key_chunk_size),
         )
 
-        global_max = torch.max(chunk_max, dim=0, keepdim=True)
+        global_max, _ = torch.max(chunk_max, dim=0, keepdim=True)
         max_diffs = torch.exp(chunk_max - global_max)
         chunk_values *= torch.unsqueeze(max_diffs, dim=-1)
         chunk_weights *= max_diffs
