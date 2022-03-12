@@ -107,6 +107,9 @@ class FasterMultiHeadAttention(nn.Module):
             Key embeddings of shape :math:`(N, L, E_v)` where :math:`N` is the batch size,\
             :math:`L` is the source sequence length, and :math:`E_v` is the value embedding dimension ``embed_dim``.
         """
+        query = self.q_proj(query)
+        key = self.k_proj(key)
+        value = self.v_proj(value)
         print("1 >>>")
         print(query.size())
         print(key.size())
@@ -114,16 +117,6 @@ class FasterMultiHeadAttention(nn.Module):
         num_q, num_heads, q_features = query.size()
 
         def _chunk_scanner(chunk_idx, _):
-            # query_chunk_size = chunk_idx + min(self.query_chunk_size, num_q)
-            # query_chunk = query[
-            #     chunk_idx:query_chunk_size,
-            #     :num_heads,
-            #     :q_features,
-            # ]
-            # return chunk_idx + self.query_chunk_size, self._query_chunk_attention(
-            #     query_chunk, key, value
-            # )
-            # def chunk_scanner(chunk_idx, _):
             query_chunk = dynamic_slice(
                 query,
                 (chunk_idx, 0, 0),
@@ -141,8 +134,10 @@ class FasterMultiHeadAttention(nn.Module):
             length=math.ceil(num_q / self.query_chunk_size),
         )
         print("output >>>")
-        print(res.reshape(num_q, num_heads, value.shape[-1]).size())
-        return res.reshape(num_q, num_heads, value.shape[-1])
+        outputs = res.reshape(num_q, num_heads, value.shape[-1])
+        outputs = self.out_proj(outputs)
+        print(outputs.size())
+        return outputs
 
     def _query_chunk_attention(
         self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor
