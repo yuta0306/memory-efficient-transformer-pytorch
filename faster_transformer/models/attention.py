@@ -8,6 +8,28 @@ import torch.utils.checkpoint as checkpoint
 from ..utils import dynamic_slice, map_, scan
 
 
+class ScaledDotProductAttention(nn.Module):
+    """ScaledDotProductAttention"""
+
+    def __init__(self) -> None:
+        super(ScaledDotProductAttention, self).__init__()
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+    ):
+        k_features = key.size(-1)
+        scores = query.matmul(key.transpose(-2, -1)) / math.sqrt(k_features)
+        if mask is not None:
+            scores = scores.masked_fill(mask == 0, -1e9)
+        attention = self.softmax(scores, dim=-1)
+        return attention.matmul(value)
+
+
 class FasterMultiHeadAttention(nn.Module):
     """Memory-efficient multi-head dot product attention.
 
@@ -56,6 +78,8 @@ class FasterMultiHeadAttention(nn.Module):
         self.dropout = dropout
         self.batch_first = batch_first
         self.head_dim = embed_dim // num_heads
+
+        self.add_bias_kv = add_bias_kv
         assert (
             self.head_dim * num_heads == self.embed_dim
         ), "embed_dim must be divisible by num_heads"
@@ -73,18 +97,19 @@ class FasterMultiHeadAttention(nn.Module):
 
         self.add_zero_attn = add_zero_attn
 
-        # self._reset_parameters()
+        self._reset_parameters()
 
         # faster-transformer settings
         self.query_chunk_size = query_chunk_size
         self.key_chunk_size = key_chunk_size
 
     def _reset_parameters(self):
-        nn.init.xavier_uniform_(self.q_proj)
-        nn.init.xavier_uniform_(self.k_proj)
-        nn.init.xavier_uniform_(self.v_proj)
-        nn.init.xavier_normal_(self.k_proj.bias)
-        nn.init.xavier_normal_(self.v_proj.bias)
+        nn.init.xavier_uniform_(self.q_proj.weight)
+        nn.init.xavier_uniform_(self.k_proj.weight)
+        nn.init.xavier_uniform_(self.v_proj.weight)
+        if self.add_bias_kv:
+            nn.init.xavier_normal_(self.k_proj.bias)
+            nn.init.xavier_normal_(self.v_proj.bias)
 
         nn.init.constant_(self.out_proj.bias, 0.0)
 
@@ -107,21 +132,30 @@ class FasterMultiHeadAttention(nn.Module):
             Key embeddings of shape :math:`(N, L, E_v)` where :math:`N` is the batch size,\
             :math:`L` is the source sequence length, and :math:`E_v` is the value embedding dimension ``embed_dim``.
         """
-        query = self.q_proj(query)
-        key = self.k_proj(key)
-        value = self.v_proj(value)
-        print("1 >>>")
-        print(query.size())
-        print(key.size())
-        print(value.size())
-        num_q, num_heads, q_features = query.size()
+        query = self.q_proj(query)  # query projection
+        key = self.k_proj(key)  # key projection
+        value = self.v_proj(value)  # value projection
+        # print("1 >>>")
+        # print(query.size())
+        # print(key.size())
+        # print(value.size())
+        B, num_q, q_features = query.size()
+        query = query.reshape(B, -1, self.num_heads, self.head_dim)
+        key = key.reshape(B, -1, self.num_heads, self.head_dim)
+        value = value.reshape(B, -1, self.num_heads, self.head_dim)
+        B, num_q, num_heads, q_features = query.size()
+        # print("1-1 >>>")
+        # print(query.size())
+        # print(key.size())
+        # print(value.size())
 
         def _chunk_scanner(chunk_idx, _):
             query_chunk = dynamic_slice(
                 query,
-                (chunk_idx, 0, 0),
-                sizes=(min(self.query_chunk_size, num_q), num_heads, q_features),
+                (0, chunk_idx, 0, 0),
+                sizes=(B, min(self.query_chunk_size, num_q), num_heads, q_features),
             )
+            # print("query_chunk", query_chunk.size())
             return (
                 chunk_idx + self.query_chunk_size,
                 self._query_chunk_attention(query_chunk, key, value),
@@ -133,22 +167,24 @@ class FasterMultiHeadAttention(nn.Module):
             xs=None,
             length=math.ceil(num_q / self.query_chunk_size),
         )
-        print("output >>>")
-        outputs = res.reshape(num_q, num_heads, value.shape[-1])
+        # print("output >>>")
+        # print(res.size())
+        outputs = res.transpose(0, 1).reshape(B, num_q, -1)
+        # print(outputs.size())
         outputs = self.out_proj(outputs)
-        print(outputs.size())
+        # print(outputs.size())
         return outputs
 
     def _query_chunk_attention(
         self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor
     ):
         """Multi-head dot product attention with a limited number of queries."""
-        print("2 >>>")
-        print(query.size())
-        print(key.size())
-        print(value.size())
-        num_kv, num_heads, k_features = key.shape
-        v_features = value.shape[-1]
+        # print("2 >>>")
+        # print(query.size())
+        # print(key.size())
+        # print(value.size())
+        B, num_kv, num_heads, k_features = key.shape
+        # v_features = value.shape[-1]
         key_chunk_size = min(self.key_chunk_size, num_kv)
         query = query / torch.sqrt(torch.tensor(k_features))
 
@@ -156,43 +192,79 @@ class FasterMultiHeadAttention(nn.Module):
         def summarize_chunk(
             query: torch.Tensor, key: torch.Tensor, value: torch.Tensor
         ):
-            attn_weights: torch.Tensor = torch.einsum("qhd,khd->qhk", query, key)
+            B, L = query.size(0), query.size(1)
+            attn_weights = torch.einsum("bqhd,bkhd->bqhk", query, key)
+            # print("2-2 >>>")
+            # print(attn_weights.size())
             max_score, _ = torch.max(attn_weights, dim=-1, keepdim=True)
+            # print(max_score.size())
             max_score = max_score.detach()
             exp_weights = torch.exp(attn_weights - max_score)
-            exp_values = torch.einsum("vhf,qhv->qhf", value, exp_weights)
+            # print(exp_weights.size())
+            exp_values = torch.einsum("bvhf,bqhv->bqhf", value, exp_weights)
+            # print(exp_values.size())
             return (
                 exp_values,
                 exp_weights.sum(dim=-1),
-                max_score.reshape((query.size(0), num_heads)),
+                max_score.reshape((B, L, num_heads)),
             )
 
         def chunk_scanner(chunk_idx):
             key_chunk_size_ = chunk_idx + key_chunk_size
-            key_chunk = key[
-                chunk_idx:key_chunk_size_,
-                :num_heads,
-                :k_features,
-            ]
-            value_chunk = value[
-                chunk_idx:key_chunk_size_,
-                :num_heads,
-                :v_features,
-            ]
+            # key_chunk = key[
+            #     :,
+            #     chunk_idx:key_chunk_size_,
+            #     :num_heads,
+            #     :k_features,
+            # ]
+            # value_chunk = value[
+            #     :,
+            #     chunk_idx:key_chunk_size_,
+            #     :num_heads,
+            #     :v_features,
+            # ]
+            B, num_k, num_heads, k_features = key.size()
+            key_chunk = dynamic_slice(
+                key,
+                (0, chunk_idx, 0, 0),
+                sizes=(B, key_chunk_size_, num_heads, k_features),
+            )
+            B, num_v, num_heads, v_features = value.size()
+            value_chunk = dynamic_slice(
+                value,
+                (0, chunk_idx, 0, 0),
+                sizes=(B, key_chunk_size_, num_heads, v_features),
+            )
+            # print("2-1 >>>")
+            # print(query.size())
+            # print(key_chunk.size())
+            # print(value_chunk.size())
             return checkpoint.checkpoint(summarize_chunk, query, key_chunk, value_chunk)
 
         chunk_values, chunk_weights, chunk_max = map_(
             chunk_scanner,
             torch.arange(0, num_kv, key_chunk_size),
         )
+        # print("2-3 >>>")
+        # print(chunk_values.size())
+        # print(chunk_weights.size())
+        # print(chunk_max.size())
 
         global_max, _ = torch.max(chunk_max, dim=0, keepdim=True)
+        # global_max, _ = torch.max(chunk_max, dim=1, keepdim=True)
         max_diffs = torch.exp(chunk_max - global_max)
         chunk_values *= torch.unsqueeze(max_diffs, dim=-1)
         chunk_weights *= max_diffs
+        # print(global_max.size())
+        # print(chunk_weights.size())
 
         all_values = chunk_values.sum(dim=0)
+        # all_values = chunk_values.sum(dim=1)
         all_weights = torch.unsqueeze(chunk_weights, dim=-1).sum(dim=0)
+        # all_weights = torch.unsqueeze(chunk_weights, dim=-1).sum(dim=1)
+        # print(all_values.size())
+        # print(all_weights.size())
+        # print((all_values / all_weights).size())
         return all_values / all_weights
 
     # def chunk_scanner(chunk_idx, _):
