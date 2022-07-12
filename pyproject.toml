@@ -8,6 +8,7 @@ authors = ["yuta0306 <you-2001-3-6@ezweb.ne.jp>"]
 python = "^3.9"
 torch = "^1.10.2"
 numpy = "^1.22.2"
+tqdm = "^4.64.0"
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"
