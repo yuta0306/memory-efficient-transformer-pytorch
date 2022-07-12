@@ -32,11 +32,27 @@ class ScaledDotProductAttention(nn.Module):
 
 class FasterMultiHeadAttention(nn.Module):
     """Memory-efficient multi-head dot product attention.
+    `Self-attention Does Not Need $O(n^2)$ Memory <https://arxiv.org/ags/2112.05682>`
+    `Attention Is All You Need <https://arxiv.org/abs/1706.03762>`
 
     Attributes
     ----------
-    query_chunk_size : int, default=1024
-    key_chunk_size : int, default=4096
+    embed_dim : int
+    kdim : int
+    vdim : int
+    _qkv_same_embed_dim : bool
+    num_heads : int
+    dropout : nn.Dropout
+    batch_first : bool
+    head_dim : bool
+    add_bias_kv : bool
+    q_proj : nn.Linear
+    k_proj : nn.Linear
+    v_proj : nn.Linear
+    out_proj : nn.Linear
+    add_zero_attn : bool
+    query_chunk_size : int
+    key_chunk_size : int
     """
 
     __constants__ = ["batch_first"]
@@ -52,8 +68,8 @@ class FasterMultiHeadAttention(nn.Module):
         bias: bool = True,
         add_bias_kv: bool = False,
         add_zero_attn: bool = False,
-        kdim: int = None,
-        vdim: int = None,
+        kdim: Optional[int] = None,
+        vdim: Optional[int] = None,
         batch_first: bool = True,  # False as default in torch.nn.MultiHeadAttention
         device: Optional[str] = None,
         dtype: Optional[type] = None,
@@ -65,6 +81,17 @@ class FasterMultiHeadAttention(nn.Module):
 
         Parameters
         ----------
+        embed_dim : int
+        num_heads : int
+        dropout : float = 0.0
+        bias : bool, default=True
+        add_bias_kv : bool, default=False
+        add_zero_attn : bool, default=False
+        kdim : optional, int
+        vdim : optional, int
+        batch_first : bool, default=True
+        device : optional, str
+        dtype : optional, type
         query_chunk_size : int, default=1024
         key_chunk_size : int, default=4096
         """
@@ -136,6 +163,12 @@ class FasterMultiHeadAttention(nn.Module):
         value : torch.Tensor
             Key embeddings of shape :math:`(N, L, E_v)` where :math:`N` is the batch size,\
             :math:`L` is the source sequence length, and :math:`E_v` is the value embedding dimension ``embed_dim``.
+        mask : optional, torch.Tensor
+            If specified, a 2D preventing attention to certain positions. Must be of shape\
+            :math:`(L, S)` or :math:`(N\cdot\text{num\_heads}, L, S)`, where :math:`N` is the batch size,\
+            :math:`L` is the target sequence length, and :math:`S` is the source sequence length. A 2D mask will be\
+            broadcasted across the batch while a 3D mask allows for a different mask for each entry in the batch.
+
         """
         query = self.q_proj(query)  # query projection
         key = self.k_proj(key)  # key projection
