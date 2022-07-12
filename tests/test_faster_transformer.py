@@ -35,12 +35,30 @@ def test_version():
 def test_attention():
     builtin, model = build_models()
 
-    query = torch.randn(size=(2, 4096, 768), requires_grad=True)
-    key = torch.randn(size=(2, 4096, 768), requires_grad=True)
-    value = torch.randn(size=(2, 4096, 768), requires_grad=True)
+    query = torch.randn(size=(2, 2048, 768), requires_grad=True)
+    key = torch.randn(size=(2, 2048, 768), requires_grad=True)
+    value = torch.randn(size=(2, 2048, 768), requires_grad=True)
 
     output, attention_weights = model(query, key, value)
     output_builtin, attention_weights_builtin = builtin(query, key, value)
+
+    assert output.size() == output_builtin.size()
+    assert attention_weights is None
+
+    eps = 1e-6
+    assert nn.MSELoss()(output, output_builtin) < eps
+
+
+def test_attention_with_mask():
+    builtin, model = build_models()
+
+    query = torch.randn(size=(2, 2048, 768), requires_grad=True)
+    key = torch.randn(size=(2, 2048, 768), requires_grad=True)
+    value = torch.randn(size=(2, 2048, 768), requires_grad=True)
+    mask = torch.zeros((2, 2048))
+
+    output, attention_weights = model(query, key, value, mask)
+    output_builtin, attention_weights_builtin = builtin(query, key, value, mask)
 
     assert output.size() == output_builtin.size()
     assert attention_weights is None

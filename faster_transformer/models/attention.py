@@ -122,6 +122,7 @@ class FasterMultiHeadAttention(nn.Module):
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, None]]:
         """
         Parameters
@@ -174,7 +175,11 @@ class FasterMultiHeadAttention(nn.Module):
         return outputs
 
     def _query_chunk_attention(
-        self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
     ):
         """Multi-head dot product attention with a limited number of queries."""
         B, num_kv, num_heads, k_features = key.shape
@@ -184,10 +189,21 @@ class FasterMultiHeadAttention(nn.Module):
 
         # @functools.partial(checkpoint.checkpoint, preserve_rng_state=True)
         def summarize_chunk(
-            query: torch.Tensor, key: torch.Tensor, value: torch.Tensor
+            query: torch.Tensor,
+            key: torch.Tensor,
+            value: torch.Tensor,
+            mask: Optional[torch.Tensor] = None,
         ):
             # B, L = query.size(0), query.size(1)
             attn_weights = torch.einsum("...qhd,...khd->...qhk", query, key)
+            if mask is not None:
+                big_neg = torch.tensor(
+                    torch.finfo(attn_weights.dtype).min,
+                    device=mask.device,
+                    dtype=torch.float32,
+                )
+                mask = torch.einsum("...hqk->...qhk", mask)
+                attn_weights = torch.where(mask, attn_weights, big_neg)
             max_score, _ = torch.max(attn_weights, dim=-1, keepdim=True)
             max_score = max_score.detach()
             exp_weights = torch.exp(attn_weights - max_score)
