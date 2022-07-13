@@ -91,6 +91,63 @@ class FasterTransformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
+    def forward(
+        self,
+        src: torch.Tensor,
+        tgt: torch.Tensor,
+        src_mask: Optional[torch.Tensor] = None,
+        tgt_mask: Optional[torch.Tensor] = None,
+        memory_mask: Optional[torch.Tensor] = None,
+        src_key_padding_mask: Optional[torch.Tensor] = None,
+        tgt_key_padding_mask: Optional[torch.Tensor] = None,
+        memory_key_padding_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        r"""Take in and process masked source/target sequences.
+
+        Parameters
+        ----------
+        src
+            the sequence to the encoder (required).
+        tgt
+            the sequence to the decoder (required).
+        src_mask
+            the additive mask for the src sequence (optional).
+        tgt_mask
+            the additive mask for the tgt sequence (optional).
+        memory_mask
+            the additive mask for the encoder output (optional).
+        src_key_padding_mask
+            the ByteTensor mask for src keys per batch (optional).
+        tgt_key_padding_mask
+            the ByteTensor mask for tgt keys per batch (optional).
+        memory_key_padding_mask
+            the ByteTensor mask for memory keys per batch (optional).
+        """
+        if src.size(-1) != self.d_model or tgt.size(-1) != self.d_model:
+            raise RuntimeError(
+                "the feature number of src and tgt must be equal to d_model"
+            )
+
+        memory = self.encoder(
+            src, mask=src_mask, src_key_padding_mask=src_key_padding_mask
+        )
+        output = self.decoder(
+            tgt,
+            memory,
+            tgt_mask=tgt_mask,
+            memory_mask=memory_mask,
+            tgt_key_padding_mask=tgt_key_padding_mask,
+            memory_key_padding_mask=memory_key_padding_mask,
+        )
+        return output
+
+    @staticmethod
+    def generate_square_subsequent_mask(sz: int) -> torch.Tensor:
+        """Generate a square mask for the sequence. The masked positions are filled with -1e9.
+        Unmasked positions are filled with float(0.0).
+        """
+        return torch.triu(torch.full((sz, sz), -1e9), diagonal=1)
+
 
 class FasterTransformerEncoder(nn.Module):
     __constants__ = ["norm"]
@@ -229,8 +286,8 @@ class FasterTransformerEncoderLayer(nn.Module):
             x,
             x,
             x,
-            attn_mask=attn_mask,
-            key_padding_mask=key_padding_mask,
+            mask=attn_mask,
+            # key_padding_mask=key_padding_mask,
         )
         return self.dropout1(x)
 
@@ -419,8 +476,8 @@ class FasterTransformerDecoderLayer(nn.Module):
             x,
             x,
             x,
-            attn_mask=attn_mask,
-            key_padding_mask=key_padding_mask,
+            mask=attn_mask,
+            # key_padding_mask=key_padding_mask,
         )
         return self.dropout1(x)
 
@@ -436,8 +493,8 @@ class FasterTransformerDecoderLayer(nn.Module):
             x,
             mem,
             mem,
-            attn_mask=attn_mask,
-            key_padding_mask=key_padding_mask,
+            mask=attn_mask,
+            # key_padding_mask=key_padding_mask,
         )
         return self.dropout2(x)
 

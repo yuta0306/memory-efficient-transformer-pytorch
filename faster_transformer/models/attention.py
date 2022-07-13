@@ -194,7 +194,7 @@ class FasterMultiHeadAttention(nn.Module):
             )
             return (
                 chunk_idx + self.query_chunk_size,
-                self._query_chunk_attention(query_chunk, key, value),
+                self._query_chunk_attention(query_chunk, key, value, mask),
             )
 
         _, res = scan(
@@ -232,13 +232,8 @@ class FasterMultiHeadAttention(nn.Module):
             # B, L = query.size(0), query.size(1)
             attn_weights = torch.einsum("...qhd,...khd->...qhk", query, key)
             if mask is not None:
-                big_neg = torch.tensor(
-                    torch.finfo(attn_weights.dtype).min,
-                    device=mask.device,
-                    dtype=torch.float32,
-                )
-                mask = torch.einsum("...hqk->...qhk", mask)
-                attn_weights = torch.where(mask, attn_weights, big_neg)
+                # mask = torch.einsum("...hqk->...qhk", mask)
+                attn_weights = torch.where(mask == 1, attn_weights, 1e-9)
             max_score, _ = torch.max(attn_weights, dim=-1, keepdim=True)
             max_score = max_score.detach()
             exp_weights = torch.exp(attn_weights - max_score)
@@ -257,7 +252,9 @@ class FasterMultiHeadAttention(nn.Module):
                 (0, chunk_idx, 0, 0),
                 sizes=(B, key_chunk_size, num_heads, v_features),
             )
-            return checkpoint.checkpoint(summarize_chunk, query, key_chunk, value_chunk)
+            return checkpoint.checkpoint(
+                summarize_chunk, query, key_chunk, value_chunk, mask
+            )
 
         chunk_values, chunk_weights, chunk_max = map_(
             chunk_scanner,
