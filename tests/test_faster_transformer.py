@@ -75,6 +75,7 @@ def test_attention_with_mask():
 
 def test_transformer():
     builtin = nn.Transformer()
+    print(builtin)
     state_dict = builtin.state_dict()
     state_dict_new = OrderedDict()
     for k, v in state_dict.items():
@@ -93,6 +94,7 @@ def test_transformer():
         else:
             state_dict_new[k] = v
     model = FasterTransformer(activation="relu")
+    print(model)
     keys = [n for n, p in model.named_parameters()]
     for key in state_dict_new.keys():
         if key not in keys:

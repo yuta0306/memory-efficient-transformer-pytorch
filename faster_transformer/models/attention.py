@@ -141,6 +141,8 @@ class FasterMultiHeadAttention(nn.Module):
             nn.init.xavier_normal_(self.k_proj.bias)
             nn.init.xavier_normal_(self.v_proj.bias)
 
+        if self.q_proj.bias is not None:
+            nn.init.constant_(self.q_proj.bias, 0.0)
         if self.out_proj.bias is not None:
             nn.init.constant_(self.out_proj.bias, 0.0)
 
