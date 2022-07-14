@@ -151,6 +151,8 @@ class FasterMultiHeadAttention(nn.Module):
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,
+        # key_padding_mask: Optional[torch.Tensor] = None,
+        # attn_mask: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, None]]:
         """
@@ -166,20 +168,46 @@ class FasterMultiHeadAttention(nn.Module):
             Key embeddings of shape :math:`(N, L, E_v)` where :math:`N` is the batch size,\
             :math:`L` is the source sequence length, and :math:`E_v` is the value embedding dimension ``embed_dim``.
         mask : optional, torch.Tensor
-            If specified, a 2D preventing attention to certain positions. Must be of shape\
-            :math:`(L, S)` or :math:`(N\cdot\text{num\_heads}, L, S)`, where :math:`N` is the batch size,\
-            :math:`L` is the target sequence length, and :math:`S` is the source sequence length. A 2D mask will be\
-            broadcasted across the batch while a 3D mask allows for a different mask for each entry in the batch.
-
+            :math:`(N, src_len)` or :math:`(N, src_len, tgt_len)` or :math:`(N, num_heads, src_len, tgt_len)`
         """
         query = self.q_proj(query)  # query projection
         key = self.k_proj(key)  # key projection
         value = self.v_proj(value)  # value projection
 
         B, num_q, _ = query.size()
+        query_chunk_size = min(self.query_chunk_size, num_q)
+
         query = query.contiguous().view(B, -1, self.num_heads, self.head_dim)
         key = key.contiguous().view(B, -1, self.num_heads, self.head_dim)
         value = value.contiguous().view(B, -1, self.num_heads, self.head_dim)
+
+        # validate mask size
+        if mask is not None:
+            num_kv = key.size(1)
+            if mask.ndim == 2:
+                assert mask.size() == (
+                    B,
+                    num_q,
+                ), f"({B}, {num_q}) is expected, but {mask.size()} is given"
+                mask = (
+                    mask.view(B, 1, num_q, 1)
+                    .repeat(1, 1, 1, num_q)
+                    .repeat(1, self.num_heads, 1, 1)
+                )
+            elif mask.ndim == 3:
+                assert mask.size() == (
+                    B,
+                    num_q,
+                    num_kv,
+                ), f"({B}, {num_q}, {num_kv}) is expected, but {mask.size()} is given"
+                mask = mask.unsqueeze(dim=1).repeat(1, self.num_heads, 1, 1)  # head
+            elif mask.ndim == 4:
+                assert mask.size() == (
+                    B,
+                    self.num_heads,
+                    num_q,
+                    num_kv,
+                ), f"({B}, {self.num_heads}, {num_q}, {num_kv}) is expected, but {mask.size()} is given"
 
         def _chunk_scanner(chunk_idx, _):
             query_chunk = dynamic_slice(
@@ -187,14 +215,30 @@ class FasterMultiHeadAttention(nn.Module):
                 (0, chunk_idx, 0, 0),
                 sizes=(
                     B,
-                    min(self.query_chunk_size, num_q),
+                    query_chunk_size,
                     self.num_heads,
                     self.head_dim,
                 ),
             )
+
+            if mask is None:
+                mask_chunk = None
+            elif mask.size(-2) == 1:
+                mask_chunk = mask
+            elif mask.size(-2) == num_q:
+                mask_chunk = dynamic_slice(
+                    mask,
+                    (0, 0, chunk_idx, 0),
+                    sizes=(B, self.num_heads, query_chunk_size, mask.size(-1)),
+                )
+            else:
+                raise TypeError(
+                    f"mask.size(-2) == {mask.size(-2)} must broadcast with query.size(-3) == {num_q}"
+                )
+
             return (
                 chunk_idx + self.query_chunk_size,
-                self._query_chunk_attention(query_chunk, key, value, mask),
+                self._query_chunk_attention(query_chunk, key, value, mask_chunk),
             )
 
         _, res = scan(
@@ -217,7 +261,7 @@ class FasterMultiHeadAttention(nn.Module):
         mask: Optional[torch.Tensor] = None,
     ):
         """Multi-head dot product attention with a limited number of queries."""
-        B, num_kv, num_heads, k_features = key.shape
+        B, num_kv, num_heads, k_features = key.size()
         v_features = value.size(-1)
         key_chunk_size = min(self.key_chunk_size, num_kv)
         query = query / torch.sqrt(torch.tensor(k_features))
@@ -229,11 +273,17 @@ class FasterMultiHeadAttention(nn.Module):
             value: torch.Tensor,
             mask: Optional[torch.Tensor] = None,
         ):
-            # B, L = query.size(0), query.size(1)
             attn_weights = torch.einsum("...qhd,...khd->...qhk", query, key)
             if mask is not None:
-                # mask = torch.einsum("...hqk->...qhk", mask)
-                attn_weights = torch.where(mask == 1, attn_weights, 1e-9)
+                mask = torch.einsum("...hqk->...qhk", mask)
+                big_neg = torch.tensor(
+                    torch.finfo(attn_weights.dtype).min,
+                    device=attn_weights.device,
+                )
+                if mask.dtype == torch.bool:
+                    attn_weights = torch.where(mask, attn_weights, big_neg)
+                else:
+                    attn_weights = torch.where(mask == 1, attn_weights, big_neg)
             max_score, _ = torch.max(attn_weights, dim=-1, keepdim=True)
             max_score = max_score.detach()
             exp_weights = torch.exp(attn_weights - max_score)
@@ -252,8 +302,20 @@ class FasterMultiHeadAttention(nn.Module):
                 (0, chunk_idx, 0, 0),
                 sizes=(B, key_chunk_size, num_heads, v_features),
             )
+
+            if mask is None:
+                mask_chunk = None
+            elif mask.size(-1) == 1:
+                mask_chunk = mask
+            elif mask.size(-1) == num_kv:
+                mask_chunk = dynamic_slice(
+                    mask,
+                    (0, 0, 0, chunk_idx),
+                    sizes=(B, num_heads, query.size(1), key_chunk_size),
+                )
+
             return checkpoint.checkpoint(
-                summarize_chunk, query, key_chunk, value_chunk, mask
+                summarize_chunk, query, key_chunk, value_chunk, mask_chunk
             )
 
         chunk_values, chunk_weights, chunk_max = map_(

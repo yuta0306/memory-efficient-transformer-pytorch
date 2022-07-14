@@ -31,47 +31,67 @@ def build_models():
     return builtin, model
 
 
+# @pytest.mark.skip()
 def test_version():
     assert __version__ == "0.1.0"
 
 
 # @pytest.mark.skip()
-def test_attention():
+def test_self_attention():
     builtin, model = build_models()
 
-    query = torch.randn(size=(2, 2048, 768), requires_grad=True)
-    key = torch.randn(size=(2, 2048, 768), requires_grad=True)
-    value = torch.randn(size=(2, 2048, 768), requires_grad=True)
+    query = torch.randn(size=(2, 1024, 768), requires_grad=True)
 
-    output, attention_weights = model(query, key, value)
-    output_builtin, attention_weights_builtin = builtin(query, key, value)
+    output, attention_weights = model(query, query, query)
+    output_builtin, attention_weights_builtin = builtin(query, query, query)
 
     assert output.size() == output_builtin.size()
     assert attention_weights is None
 
-    eps = 1e-6
+    eps = 1e-5
+    assert nn.MSELoss()(output, output_builtin) < eps
+
+
+def test_self_attention_with_long_input():
+    builtin, model = build_models()
+
+    query = torch.randn(size=(2, 4096, 768), requires_grad=True)
+
+    output, attention_weights = model(query, query, query)
+    output_builtin, attention_weights_builtin = builtin(query, query, query)
+
+    assert output.size() == output_builtin.size()
+    assert attention_weights is None
+
+    eps = 1e-5
     assert nn.MSELoss()(output, output_builtin) < eps
 
 
 # @pytest.mark.skip()
-def test_attention_with_mask():
+def test_self_attention_with_mask():
     builtin, model = build_models()
 
-    query = torch.randn(size=(2, 2048, 768), requires_grad=True)
-    key = torch.randn(size=(2, 2048, 768), requires_grad=True)
-    value = torch.randn(size=(2, 2048, 768), requires_grad=True)
-    mask = torch.zeros((2, 2048))
+    query = torch.randn(size=(4, 1024, 768), requires_grad=True)
+    mask = torch.ones((4, 1024))
+    mask_builtin = torch.ones((4, 1024))
+    mask[..., -128:] = 0
+    mask_builtin[..., -128:] = 0
 
-    output, attention_weights = model(query, key, value, mask)
-    output_builtin, attention_weights_builtin = builtin(query, key, value, mask)
+    output, attention_weights = model(query, query, query, mask)
+    print(output)
+    output_builtin, attention_weights_builtin = builtin(
+        query, query, query, mask_builtin
+    )
+    print(output_builtin)
 
     assert output.size() == output_builtin.size()
     assert attention_weights is None
 
-    eps = 1e-6
+    eps = 1e-5
     assert nn.MSELoss()(output, output_builtin) < eps
 
 
+@pytest.mark.skip()
 def test_transformer():
     builtin = nn.Transformer(batch_first=True, nhead=1)
     model = FasterTransformer(activation="relu", nheads=1)
@@ -79,8 +99,8 @@ def test_transformer():
 
     model = load_state_dict(model, state_dict)
 
-    src = torch.randn(size=(2, 512, 512), requires_grad=True)
-    tgt = torch.randn(size=(2, 1, 512), requires_grad=True)
+    src = torch.randn(size=(2, 512, 768), requires_grad=True)
+    tgt = torch.randn(size=(2, 1, 768), requires_grad=True)
     output_builtin = builtin(src, tgt)
     print(output_builtin)
     output = model(src, tgt)
@@ -88,5 +108,5 @@ def test_transformer():
 
     assert output.size() == output_builtin.size()
 
-    eps = 1e-6
+    eps = 1e-5
     assert nn.MSELoss()(output, output_builtin) < eps
