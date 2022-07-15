@@ -5,9 +5,9 @@ description = ""
 authors = ["yuta0306 <you-2001-3-6@ezweb.ne.jp>"]
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = ">=3.7,<3.11"
 torch = "^1.10.2"
-numpy = "^1.22.2"
+numpy = "1.21.2"
 tqdm = "^4.64.0"
 transformers = "^4.20.1"
 
