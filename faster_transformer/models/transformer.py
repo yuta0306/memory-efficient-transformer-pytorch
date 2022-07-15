@@ -98,9 +98,6 @@ class FasterTransformer(nn.Module):
         src_mask: Optional[torch.Tensor] = None,
         tgt_mask: Optional[torch.Tensor] = None,
         memory_mask: Optional[torch.Tensor] = None,
-        src_key_padding_mask: Optional[torch.Tensor] = None,
-        tgt_key_padding_mask: Optional[torch.Tensor] = None,
-        memory_key_padding_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         r"""Take in and process masked source/target sequences.
 
@@ -116,28 +113,18 @@ class FasterTransformer(nn.Module):
             the additive mask for the tgt sequence (optional).
         memory_mask
             the additive mask for the encoder output (optional).
-        src_key_padding_mask
-            the ByteTensor mask for src keys per batch (optional).
-        tgt_key_padding_mask
-            the ByteTensor mask for tgt keys per batch (optional).
-        memory_key_padding_mask
-            the ByteTensor mask for memory keys per batch (optional).
         """
         if src.size(-1) != self.d_model or tgt.size(-1) != self.d_model:
             raise RuntimeError(
                 "the feature number of src and tgt must be equal to d_model"
             )
 
-        memory = self.encoder(
-            src, mask=src_mask, src_key_padding_mask=src_key_padding_mask
-        )
+        memory = self.encoder(src, mask=src_mask)
         output = self.decoder(
             tgt,
             memory,
             tgt_mask=tgt_mask,
             memory_mask=memory_mask,
-            tgt_key_padding_mask=tgt_key_padding_mask,
-            memory_key_padding_mask=memory_key_padding_mask,
         )
         return output
 
@@ -167,7 +154,6 @@ class FasterTransformerEncoder(nn.Module):
         self,
         src: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
-        src_key_padding_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Parameters
@@ -176,23 +162,11 @@ class FasterTransformerEncoder(nn.Module):
             the sequence to the encoder (required).
         mask
             the mask for the src sequence (optional).
-        src_key_padding_mask
-            the mask for the src keys per batch (optional).
         """
         output = src
-        convert_to_nested = False
 
         for mod in self.layers:
-            if convert_to_nested:
-                output = mod(output, src_mask=mask)
-            else:
-                output = mod(
-                    output, src_mask=mask, src_key_padding_mask=src_key_padding_mask
-                )
-
-        if convert_to_nested:
-            # output = output.to_padded_tensor(0.0)
-            pass
+            output = mod(output, src_mask=mask)
 
         if self.norm is not None:
             output = self.norm(output)
@@ -221,7 +195,6 @@ class FasterTransformerEncoderLayer(nn.Module):
             embed_dim=d_model,
             num_heads=nhead,
             dropout=dropout,
-            batch_first=True,
             device=device,
             dtype=dtype,
             return_attention_weights=False,
@@ -253,7 +226,6 @@ class FasterTransformerEncoderLayer(nn.Module):
         self,
         src: torch.Tensor,
         src_mask: Optional[torch.Tensor] = None,
-        src_key_padding_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Parameters
@@ -262,15 +234,13 @@ class FasterTransformerEncoderLayer(nn.Module):
             the sequence to the encoder layer (required).
         src_mask
             the mask for the src sequence (optional).
-        src_key_padding_mask
-            the mask for the src keys per batch (optional).
         """
         x = src
         if self.pre_norm:
-            x = x + self._sa_block(self.norm1(x), src_mask, src_key_padding_mask)
+            x = x + self._sa_block(self.norm1(x), src_mask)
             x = x + self._ff_block(self.norm2(x))
         else:
-            x = self.norm1(x + self._sa_block(x, src_mask, src_key_padding_mask))
+            x = self.norm1(x + self._sa_block(x, src_mask))
             x = self.norm2(x + self._ff_block(x))
 
         return x
@@ -280,14 +250,12 @@ class FasterTransformerEncoderLayer(nn.Module):
         self,
         x: torch.Tensor,
         attn_mask: Optional[torch.Tensor],
-        key_padding_mask: Optional[torch.Tensor],
     ) -> torch.Tensor:
         x = self.self_attn(
             x,
             x,
             x,
             mask=attn_mask,
-            # key_padding_mask=key_padding_mask,
         )
         return self.dropout1(x)
 
@@ -310,9 +278,12 @@ class FasterTransformerDecoder(nn.Module):
         """
         Parameters
         ----------
-            decoder_layer: an instance of the TransformerDecoderLayer() class (required).
-            num_layers: the number of sub-decoder-layers in the decoder (required).
-            norm: the layer normalization component (optional).
+        decoder_layer
+            an instance of the TransformerDecoderLayer() class (required).
+        num_layers
+            the number of sub-decoder-layers in the decoder (required).
+        norm
+            the layer normalization component (optional).
 
         """
         super(FasterTransformerDecoder, self).__init__()
@@ -328,8 +299,6 @@ class FasterTransformerDecoder(nn.Module):
         memory: torch.Tensor,
         tgt_mask: Optional[torch.Tensor] = None,
         memory_mask: Optional[torch.Tensor] = None,
-        tgt_key_padding_mask: Optional[torch.Tensor] = None,
-        memory_key_padding_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Parameters
@@ -342,10 +311,6 @@ class FasterTransformerDecoder(nn.Module):
             the mask for the tgt sequence (optional).
         memory_mask
             the mask for the memory sequence (optional).
-        tgt_key_padding_mask
-            the mask for the tgt keys per batch (optional).
-        memory_key_padding_mask
-            The mask for the memory keys per batch (optional).
         """
         output = tgt
 
@@ -355,8 +320,6 @@ class FasterTransformerDecoder(nn.Module):
                 memory,
                 tgt_mask=tgt_mask,
                 memory_mask=memory_mask,
-                tgt_key_padding_mask=tgt_key_padding_mask,
-                memory_key_padding_mask=memory_key_padding_mask,
             )
 
         if self.norm is not None:
@@ -386,7 +349,6 @@ class FasterTransformerDecoderLayer(nn.Module):
             embed_dim=d_model,
             num_heads=nhead,
             dropout=dropout,
-            batch_first=True,
             device=device,
             dtype=dtype,
             return_attention_weights=False,
@@ -395,7 +357,6 @@ class FasterTransformerDecoderLayer(nn.Module):
             embed_dim=d_model,
             num_heads=nhead,
             dropout=dropout,
-            batch_first=True,
             device=device,
             dtype=dtype,
             return_attention_weights=False,
@@ -430,8 +391,6 @@ class FasterTransformerDecoderLayer(nn.Module):
         memory: torch.Tensor,
         tgt_mask: Optional[torch.Tensor] = None,
         memory_mask: Optional[torch.Tensor] = None,
-        tgt_key_padding_mask: Optional[torch.Tensor] = None,
-        memory_key_padding_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Parameters
@@ -444,23 +403,15 @@ class FasterTransformerDecoderLayer(nn.Module):
             the mask for the tgt sequence (optional).
         memory_mask
             the mask for the memory sequence (optional).
-        tgt_key_padding_mask
-            the mask for the tgt keys per batch (optional).
-        memory_key_padding_mask
-            the mask for the memory keys per batch (optional).
         """
         x = tgt
         if self.pre_norm:
-            x = x + self._sa_block(self.norm1(x), tgt_mask, tgt_key_padding_mask)
-            x = x + self._mha_block(
-                self.norm2(x), memory, memory_mask, memory_key_padding_mask
-            )
+            x = x + self._sa_block(self.norm1(x), tgt_mask)
+            x = x + self._mha_block(self.norm2(x), memory, memory_mask)
             x = x + self._ff_block(self.norm3(x))
         else:
-            x = self.norm1(x + self._sa_block(x, tgt_mask, tgt_key_padding_mask))
-            x = self.norm2(
-                x + self._mha_block(x, memory, memory_mask, memory_key_padding_mask)
-            )
+            x = self.norm1(x + self._sa_block(x, tgt_mask))
+            x = self.norm2(x + self._mha_block(x, memory, memory_mask))
             x = self.norm3(x + self._ff_block(x))
 
         return x
@@ -470,14 +421,12 @@ class FasterTransformerDecoderLayer(nn.Module):
         self,
         x: torch.Tensor,
         attn_mask: Optional[torch.Tensor],
-        key_padding_mask: Optional[torch.Tensor],
     ) -> torch.Tensor:
         x = self.self_attn(
             x,
             x,
             x,
             mask=attn_mask,
-            # key_padding_mask=key_padding_mask,
         )
         return self.dropout1(x)
 
@@ -487,14 +436,12 @@ class FasterTransformerDecoderLayer(nn.Module):
         x: torch.Tensor,
         mem: torch.Tensor,
         attn_mask: Optional[torch.Tensor],
-        key_padding_mask: Optional[torch.Tensor],
     ) -> torch.Tensor:
         x = self.multihead_attn(
             x,
             mem,
             mem,
             mask=attn_mask,
-            # key_padding_mask=key_padding_mask,
         )
         return self.dropout2(x)
 

@@ -31,12 +31,12 @@ def build_models():
     return builtin, model
 
 
-# @pytest.mark.skip()
+@pytest.mark.skip()
 def test_version():
     assert __version__ == "0.1.0"
 
 
-# @pytest.mark.skip()
+@pytest.mark.skip()
 def test_self_attention():
     builtin, model = build_models()
 
@@ -52,6 +52,7 @@ def test_self_attention():
     assert nn.MSELoss()(output, output_builtin) < eps
 
 
+@pytest.mark.skip()
 def test_self_attention_with_long_input():
     builtin, model = build_models()
 
@@ -67,7 +68,7 @@ def test_self_attention_with_long_input():
     assert nn.MSELoss()(output, output_builtin) < eps
 
 
-# @pytest.mark.skip()
+@pytest.mark.skip()
 def test_self_attention_with_mask():
     builtin, model = build_models()
 
@@ -78,11 +79,9 @@ def test_self_attention_with_mask():
     mask_builtin[..., -128:] = 0
 
     output, attention_weights = model(query, query, query, mask)
-    print(output)
     output_builtin, attention_weights_builtin = builtin(
         query, query, query, mask_builtin
     )
-    print(output_builtin)
 
     assert output.size() == output_builtin.size()
     assert attention_weights is None
@@ -93,18 +92,42 @@ def test_self_attention_with_mask():
 
 @pytest.mark.skip()
 def test_transformer():
-    builtin = nn.Transformer(batch_first=True, nhead=1)
-    model = FasterTransformer(activation="relu", nheads=1)
+    builtin = nn.Transformer(batch_first=True, nhead=1, d_model=768)
+    model = FasterTransformer(activation="relu", nheads=1, d_model=768)
     state_dict = builtin.state_dict()
 
     model = load_state_dict(model, state_dict)
 
-    src = torch.randn(size=(2, 512, 768), requires_grad=True)
+    builtin.eval()
+    model.eval()
+
+    src = torch.randn(size=(2, 1024, 768), requires_grad=True)
     tgt = torch.randn(size=(2, 1, 768), requires_grad=True)
     output_builtin = builtin(src, tgt)
-    print(output_builtin)
     output = model(src, tgt)
-    print(output)
+
+    assert output.size() == output_builtin.size()
+
+    eps = 1e-5
+    assert nn.MSELoss()(output, output_builtin) < eps
+
+
+def test_transformer_with_mask():
+    builtin = nn.Transformer(batch_first=True, nhead=1, d_model=768)
+    model = FasterTransformer(activation="relu", nheads=1, d_model=768)
+    state_dict = builtin.state_dict()
+
+    model = load_state_dict(model, state_dict)
+
+    builtin.eval()
+    model.eval()
+
+    src = torch.randn(size=(2, 1024, 768), requires_grad=True)
+    tgt = torch.randn(size=(2, 1, 768), requires_grad=True)
+    src_mask = torch.ones((2, 1024, 1024))
+    src_mask[:, -256:, -256:] = 0
+    output_builtin = builtin(src, tgt, src_mask)
+    output = model(src, tgt, src_mask)
 
     assert output.size() == output_builtin.size()
 
