@@ -1,9 +1,15 @@
 import copy
-from typing import Literal, Optional
+import sys
+from typing import Optional
 
 import torch
 import torch.nn as nn
 from faster_transformer.models.attention import FasterMultiHeadAttention
+
+if sys.version_info >= (3, 8):
+    from typing import Literal
+else:
+    from typing_extensions import Literal
 
 
 class FasterTransformer(nn.Module):
