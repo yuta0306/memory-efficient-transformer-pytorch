@@ -4,7 +4,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
-from faster_transformer.models.attention import FasterMultiHeadAttention
+from memory_efficient_transformer.models.attention import FasterMultiHeadAttention
 
 if sys.version_info >= (3, 8):
     from typing import Literal

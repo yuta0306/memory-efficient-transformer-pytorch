@@ -1,6 +1,6 @@
 [tool.poetry]
-name = "faster-transformer"
-version = "0.1.0"
+name = "memory-efficient-transformer-pytorch"
+version = "0.2.0"
 description = ""
 authors = ["yuta0306 <you-2001-3-6@ezweb.ne.jp>"]
 

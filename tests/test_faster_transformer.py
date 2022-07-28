@@ -1,9 +1,12 @@
 import pytest
 import torch
 import torch.nn as nn
-from faster_transformer import __version__
-from faster_transformer.models import FasterMultiHeadAttention, FasterTransformer
-from faster_transformer.utils.stub.load_state_dict import load_state_dict
+from memory_efficient_transformer import __version__
+from memory_efficient_transformer.models import (
+    FasterMultiHeadAttention,
+    FasterTransformer,
+)
+from memory_efficient_transformer.utils.stub.load_state_dict import load_state_dict
 
 
 def build_models():
