@@ -1,15 +1,15 @@
 [tool.poetry]
 name = "memory-efficient-transformer-pytorch"
 version = "0.2.0"
-description = ""
+description = "Implementation on PyTorch of Self-attention Does Not Need $O(n^2)$ Memory"
 authors = ["yuta0306 <you-2001-3-6@ezweb.ne.jp>"]
 
 [tool.poetry.dependencies]
 python = ">=3.7,<3.11"
-torch = "^1.10.2"
-numpy = "1.21.6"
-tqdm = "^4.64.0"
-transformers = "^4.20.1"
+torch = ">=1.10.2"
+numpy = ">=1.21.6"
+tqdm = ">=4.64.0"
+transformers = ">=4.20.1"
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"
