@@ -3,6 +3,13 @@ name = "memory-efficient-transformer-pytorch"
 version = "0.2.0"
 description = "Implementation on PyTorch of Self-attention Does Not Need $O(n^2)$ Memory"
 authors = ["yuta0306 <you-2001-3-6@ezweb.ne.jp>"]
+license = "MIT"
+homepage = "https://github.com/yuta0306/memory-efficient-transformer-pytorch"
+repository = "https://github.com/yuta0306/memory-efficient-transformer-pytorch"
+readme = "README.md"
+packages = [
+    { include = "memory_efficient_transformer" },
+]
 
 [tool.poetry.dependencies]
 python = ">=3.7,<3.11"
